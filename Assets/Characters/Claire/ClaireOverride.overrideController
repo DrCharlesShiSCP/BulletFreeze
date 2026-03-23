@@ -1,0 +1,21 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!221 &22100000
+AnimatorOverrideController:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: ClaireOverride
+  m_Controller: {fileID: 9100000, guid: 6662426742cacc44bbb4eafcea4f1d40, type: 2}
+  m_Clips:
+  - m_OriginalClip: {fileID: -203655887218126122, guid: 826d7cc1a4f35f747b177f62df2f20d5, type: 3}
+    m_OverrideClip: {fileID: -203655887218126122, guid: b6e24cd6d9a36d34a898c0c39240a5c7, type: 3}
+  - m_OriginalClip: {fileID: -203655887218126122, guid: 4b92e380d91873640800bc8e9a02ab94, type: 3}
+    m_OverrideClip: {fileID: -203655887218126122, guid: 40ebd08519580ef47afb58594890c8e7, type: 3}
+  - m_OriginalClip: {fileID: -203655887218126122, guid: 7a356ec418282364296a3efb99fa4ed5, type: 3}
+    m_OverrideClip: {fileID: -203655887218126122, guid: 922eae4ac67f4124996af7bb9178ccc1, type: 3}
+  - m_OriginalClip: {fileID: -203655887218126122, guid: 6dc3f2650f91ce64896a690827cdbeae, type: 3}
+    m_OverrideClip: {fileID: -203655887218126122, guid: ce6535d1be2f0f145a9b64b1abf1651c, type: 3}
+  - m_OriginalClip: {fileID: -203655887218126122, guid: 546cb63f6ed5a9c4aae28499fc19b49d, type: 3}
+    m_OverrideClip: {fileID: -203655887218126122, guid: a5151d3e744ceae43b673aa425dc4073, type: 3}
