@@ -45,6 +45,7 @@ public class PlayerController : MonoBehaviour
             ? projectileSpawnPoint.position
             : transform.position + Vector3.up * 1.25f;
 
+    public Camera SharedCameraRef => movementCamera != null ? movementCamera : Camera.main;
     public float MoveSpeed => moveSpeed;
     public bool IsEliminated => isEliminated;
 
@@ -76,6 +77,7 @@ public class PlayerController : MonoBehaviour
         }
 
         RefreshCameraReference();
+        WarnAboutMissingReferences();
     }
 
     protected virtual void Update()
@@ -260,5 +262,20 @@ public class PlayerController : MonoBehaviour
 
         if (isEliminated || !movementAllowed)
             animator.SetBool("IsRunning", false);
+    }
+
+    private void WarnAboutMissingReferences()
+    {
+        if (characterController == null)
+        {
+            Debug.LogWarning(
+                $"[PlayerController] Missing CharacterController on '{name}'.");
+        }
+
+        if (movementCamera == null && Camera.main == null)
+        {
+            Debug.LogWarning(
+                $"[PlayerController] No movement camera assigned for '{name}', and no MainCamera was found.");
+        }
     }
 }

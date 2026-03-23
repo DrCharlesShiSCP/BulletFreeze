@@ -14,10 +14,24 @@ public class ProjectileStrikeSystem : MonoBehaviour
     [SerializeField] private GameObject impactEffectPrefab;
     [Tooltip("How quickly spawned projectiles travel to their selected target.")]
     [SerializeField] private float projectileSpeed = 14f;
+    [Tooltip("World-space Y position where airstrike projectiles spawn before dropping downward.")]
+    [SerializeField] private float airstrikeSpawnY = 20f;
     [Tooltip("Horizontal elimination radius around the impact point.")]
     [SerializeField] private float strikeRadius = 2.5f;
     [Tooltip("Short pause after impacts resolve before the next round starts.")]
     [SerializeField] private float postImpactDelay = 0.35f;
+    [Tooltip("Failsafe timeout in seconds to prevent the shoot phase from hanging forever.")]
+    [SerializeField] private float shootPhaseTimeout = 5f;
+
+    [Header("Impact Readability")]
+    [Tooltip("Shows a short-lived ground marker that matches the elimination radius.")]
+    [SerializeField] private bool showImpactRadiusIndicator = true;
+    [Tooltip("How long the impact radius marker stays visible.")]
+    [SerializeField] private float impactRadiusIndicatorDuration = 0.7f;
+    [Tooltip("Thickness of the temporary ground marker.")]
+    [SerializeField] private float impactRadiusIndicatorHeight = 0.08f;
+    [Tooltip("Tint used for the temporary impact radius marker.")]
+    [SerializeField] private Color impactRadiusIndicatorColor = new Color(1f, 0.4f, 0.15f, 0.5f);
 
     [Header("Debug")]
     [Tooltip("Logs impacts and eliminated players during the shoot phase.")]
@@ -36,12 +50,15 @@ public class ProjectileStrikeSystem : MonoBehaviour
     public void Initialize(PlayerManager manager)
     {
         playerManager = manager;
+        WarnAboutMissingReferences();
     }
 
     public IEnumerator ResolveStrikes(IReadOnlyList<PlayerSlot> shooters)
     {
         if (playerManager == null)
             playerManager = PlayerManager.Instance;
+
+        WarnAboutMissingReferences();
 
         queuedEliminations.Clear();
         queuedImpactPoints.Clear();
@@ -80,8 +97,20 @@ public class ProjectileStrikeSystem : MonoBehaviour
                 () => remainingProjectiles--);
         }
 
+        float timeoutAt = Time.time + Mathf.Max(1f, shootPhaseTimeout);
+
         while (remainingProjectiles > 0)
+        {
+            if (Time.time > timeoutAt)
+            {
+                Debug.LogWarning(
+                    $"[ProjectileStrikeSystem] Shoot phase timed out with " +
+                    $"{remainingProjectiles} projectile(s) still pending. Continuing round.");
+                break;
+            }
+
             yield return null;
+        }
 
         ApplyQueuedEliminations();
 
@@ -94,16 +123,39 @@ public class ProjectileStrikeSystem : MonoBehaviour
         IReadOnlyList<PlayerSlot> participants,
         Action onComplete)
     {
-        Vector3 origin = shooter.Controller.ProjectileSpawnPosition;
         Vector3 target = shooter.ConfirmedTargetPoint;
+        Vector3 origin = new Vector3(target.x, airstrikeSpawnY, target.z);
+
+        if (debugLogs)
+        {
+            Debug.Log(
+                $"[ProjectileStrikeSystem] Spawning projectile for {shooter.DisplayName} " +
+                $"at {origin} -> {target}");
+        }
 
         if (projectilePrefab != null)
         {
             GameObject projectileInstance = Instantiate(projectilePrefab, origin, Quaternion.identity);
+            if (!projectileInstance.activeSelf)
+            {
+                Debug.LogWarning(
+                    $"[ProjectileStrikeSystem] Projectile prefab '{projectilePrefab.name}' spawned inactive. " +
+                    "Forcing it active so shoot phase can complete.");
+                projectileInstance.SetActive(true);
+            }
+
             StrikeProjectile projectile = projectileInstance.GetComponent<StrikeProjectile>();
 
             if (projectile != null)
             {
+                if (!projectile.enabled)
+                {
+                    Debug.LogWarning(
+                        $"[ProjectileStrikeSystem] StrikeProjectile on '{projectileInstance.name}' was disabled. " +
+                        "Forcing it enabled.");
+                    projectile.enabled = true;
+                }
+
                 projectile.Launch(
                     origin,
                     target,
@@ -111,13 +163,23 @@ public class ProjectileStrikeSystem : MonoBehaviour
                     () =>
                     {
                         HandleImpact(shooter, target, participants);
-                        onComplete?.Invoke();
-                    });
+                            onComplete?.Invoke();
+                        });
 
                 return;
             }
 
+            Debug.LogWarning(
+                $"[ProjectileStrikeSystem] Projectile prefab '{projectilePrefab.name}' is missing " +
+                $"{nameof(StrikeProjectile)}. Using fallback strike timing instead.");
+
             Destroy(projectileInstance);
+        }
+        else
+        {
+            Debug.LogWarning(
+                "[ProjectileStrikeSystem] Projectile prefab reference is missing. " +
+                "Using fallback strike timing with no visible projectile.");
         }
 
         StartCoroutine(FallbackStrikeRoutine(shooter, origin, target, participants, onComplete));
@@ -152,7 +214,24 @@ public class ProjectileStrikeSystem : MonoBehaviour
         IReadOnlyList<PlayerSlot> participants)
     {
         if (impactEffectPrefab != null)
-            Instantiate(impactEffectPrefab, impactPoint, Quaternion.identity);
+        {
+            GameObject impactFxInstance = Instantiate(impactEffectPrefab, impactPoint, Quaternion.identity);
+            if (!impactFxInstance.activeSelf)
+            {
+                Debug.LogWarning(
+                    $"[ProjectileStrikeSystem] Impact effect prefab '{impactEffectPrefab.name}' spawned inactive. " +
+                    "Forcing it active so the explosion is visible.");
+                impactFxInstance.SetActive(true);
+            }
+        }
+        else
+        {
+            Debug.LogWarning(
+                "[ProjectileStrikeSystem] Impact effect prefab reference is missing. No explosion FX will be shown.");
+        }
+
+        if (showImpactRadiusIndicator)
+            StartCoroutine(ShowImpactRadiusIndicator(impactPoint));
 
         bool hitAnyPlayer = false;
 
@@ -224,5 +303,124 @@ public class ProjectileStrikeSystem : MonoBehaviour
         Vector2 a2 = new Vector2(a.x, a.z);
         Vector2 b2 = new Vector2(b.x, b.z);
         return Vector2.Distance(a2, b2);
+    }
+
+    private void WarnAboutMissingReferences()
+    {
+        if (playerManager == null)
+        {
+            Debug.LogWarning(
+                "[ProjectileStrikeSystem] PlayerManager reference is missing. " +
+                "Projectile resolution will try to recover via singleton lookup.");
+        }
+
+        if (projectilePrefab == null)
+        {
+            Debug.LogWarning(
+                "[ProjectileStrikeSystem] Projectile prefab reference is missing. " +
+                "Fallback strike timing will be used without visible projectiles.");
+        }
+
+        if (impactEffectPrefab == null)
+        {
+            Debug.LogWarning(
+                "[ProjectileStrikeSystem] Impact effect prefab reference is missing. " +
+                "Impacts will resolve without explosion visuals.");
+        }
+    }
+
+    private IEnumerator ShowImpactRadiusIndicator(Vector3 impactPoint)
+    {
+        GameObject indicator = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        indicator.name = "ImpactRadiusIndicator";
+        indicator.transform.position = new Vector3(
+            impactPoint.x,
+            impactPoint.y + (impactRadiusIndicatorHeight * 0.5f),
+            impactPoint.z);
+        indicator.transform.localScale = new Vector3(
+            strikeRadius * 2f,
+            impactRadiusIndicatorHeight * 0.5f,
+            strikeRadius * 2f);
+
+        Collider indicatorCollider = indicator.GetComponent<Collider>();
+        if (indicatorCollider != null)
+            Destroy(indicatorCollider);
+
+        Renderer indicatorRenderer = indicator.GetComponent<Renderer>();
+        Material indicatorMaterial = CreateImpactIndicatorMaterial();
+
+        if (indicatorRenderer != null && indicatorMaterial != null)
+            indicatorRenderer.sharedMaterial = indicatorMaterial;
+
+        float elapsed = 0f;
+        float duration = Mathf.Max(0.05f, impactRadiusIndicatorDuration);
+        Color startColor = impactRadiusIndicatorColor;
+        Vector3 startScale = indicator.transform.localScale;
+        Vector3 endScale = new Vector3(startScale.x * 1.15f, startScale.y, startScale.z * 1.15f);
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float normalizedTime = Mathf.Clamp01(elapsed / duration);
+
+            if (indicator != null)
+                indicator.transform.localScale = Vector3.Lerp(startScale, endScale, normalizedTime);
+
+            if (indicatorMaterial != null)
+            {
+                Color fadedColor = startColor;
+                fadedColor.a = Mathf.Lerp(startColor.a, 0f, normalizedTime);
+                SetMaterialColor(indicatorMaterial, fadedColor);
+            }
+
+            yield return null;
+        }
+
+        if (indicatorMaterial != null)
+            Destroy(indicatorMaterial);
+
+        if (indicator != null)
+            Destroy(indicator);
+    }
+
+    private Material CreateImpactIndicatorMaterial()
+    {
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null)
+            shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null)
+            shader = Shader.Find("Standard");
+        if (shader == null)
+            shader = Shader.Find("Sprites/Default");
+
+        if (shader == null)
+        {
+            Debug.LogWarning(
+                "[ProjectileStrikeSystem] Could not find a compatible shader for the impact radius indicator.");
+            return null;
+        }
+
+        Material material = new Material(shader);
+        SetMaterialColor(material, impactRadiusIndicatorColor);
+
+        if (material.HasProperty("_Surface"))
+            material.SetFloat("_Surface", 1f);
+        if (material.HasProperty("_Blend"))
+            material.SetFloat("_Blend", 0f);
+        if (material.HasProperty("_ZWrite"))
+            material.SetFloat("_ZWrite", 0f);
+
+        return material;
+    }
+
+    private static void SetMaterialColor(Material material, Color color)
+    {
+        if (material == null)
+            return;
+
+        if (material.HasProperty("_BaseColor"))
+            material.SetColor("_BaseColor", color);
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", color);
     }
 }

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -6,6 +7,8 @@ using UnityEngine.InputSystem;
 public class PlayerManager : MonoBehaviour
 {
     public static PlayerManager Instance { get; private set; }
+
+    public event Action<string> KillFeedMessageAdded;
 
     [Header("Player Spawning")]
     [Tooltip("Character prefabs used when spawning players. Prefabs should include CharacterController and PlayerCharacterController.")]
@@ -26,14 +29,18 @@ public class PlayerManager : MonoBehaviour
     [Header("Shared References")]
     [Tooltip("Optional shared camera passed to player controllers for camera-relative movement.")]
     [SerializeField] private Camera sharedCamera;
-    [Tooltip("Optional arena collider used to clamp player aim markers.")]
-    [SerializeField] private Collider arenaBounds;
+    [Tooltip("Arena bound objects used to clamp aim. Assign one parent object or multiple individual collider objects.")]
+    [SerializeField] private Transform[] arenaBoundTargets;
     [Tooltip("Optional prefab spawned as each player's world-space target marker.")]
     [SerializeField] private GameObject crosshairPrefab;
 
     [Header("Debug")]
     [Tooltip("Logs player joins, eliminations, and reset events.")]
     [SerializeField] private bool debugLogs = true;
+    [Tooltip("Allow debug fake players to be added without a physical controller.")]
+    [SerializeField] private bool allowDebugFakePlayers = true;
+    [Tooltip("Press F6 to add one fake player or F7 to fill up to the start minimum while the lobby is open.")]
+    [SerializeField] private bool enableDebugFakePlayerHotkeys = true;
 
     private readonly List<PlayerSlot> players = new List<PlayerSlot>();
     private readonly HashSet<Gamepad> assignedGamepads = new HashSet<Gamepad>();
@@ -41,7 +48,6 @@ public class PlayerManager : MonoBehaviour
     private int lastJoinFrame = -1;
 
     public IReadOnlyList<PlayerSlot> Players => players;
-    public Collider ArenaBounds => arenaBounds;
     public int JoinedPlayerCount => players.Count;
     public Camera SharedCamera => sharedCamera != null ? sharedCamera : Camera.main;
 
@@ -59,6 +65,8 @@ public class PlayerManager : MonoBehaviour
 
     private void Start()
     {
+        WarnAboutMissingReferences();
+
         if (!requireJoinInput)
             RegisterAvailablePlayers();
     }
@@ -73,6 +81,8 @@ public class PlayerManager : MonoBehaviour
             ProcessLobbyJoinRequests();
             return;
         }
+
+        ProcessDebugHotkeys();
 
         if (pollForGamepadsWhileUnlocked && players.Count < maxPlayers)
             RegisterConnectedGamepads();
@@ -124,6 +134,55 @@ public class PlayerManager : MonoBehaviour
 
         if (debugLogs)
             Debug.Log("[PlayerManager] Match players reset.");
+    }
+
+    [ContextMenu("Debug/Add Fake Player")]
+    public void DebugAddFakePlayer()
+    {
+        if (!allowDebugFakePlayers)
+        {
+            Debug.LogWarning("[PlayerManager] Debug fake players are disabled.");
+            return;
+        }
+
+        if (rosterLocked)
+        {
+            Debug.LogWarning("[PlayerManager] Cannot add a fake player while the roster is locked.");
+            return;
+        }
+
+        SpawnPlayer(null, false, true);
+    }
+
+    [ContextMenu("Debug/Add 2 Fake Players")]
+    public void DebugAddTwoFakePlayers()
+    {
+        DebugAddFakePlayers(2);
+    }
+
+    [ContextMenu("Debug/Add 4 Fake Players")]
+    public void DebugAddFourFakePlayers()
+    {
+        DebugAddFakePlayers(4);
+    }
+
+    public void DebugAddFakePlayers(int count)
+    {
+        if (!allowDebugFakePlayers)
+        {
+            Debug.LogWarning("[PlayerManager] Debug fake players are disabled.");
+            return;
+        }
+
+        if (rosterLocked)
+        {
+            Debug.LogWarning("[PlayerManager] Cannot add fake players while the roster is locked.");
+            return;
+        }
+
+        int spawnCount = Mathf.Max(0, count);
+        for (int i = 0; i < spawnCount && players.Count < maxPlayers; i++)
+            SpawnPlayer(null, false, true);
     }
 
     public void ApplyLobbyPresentation(bool canStartMatch)
@@ -256,14 +315,14 @@ public class PlayerManager : MonoBehaviour
         return false;
     }
 
-    public void AutoConfirmAlivePlayers()
+    public void FinalizeAimTargets()
     {
         foreach (PlayerSlot player in players)
         {
             if (player == null || !player.IsAlive || player.AimController == null)
                 continue;
 
-            player.AimController.AutoConfirmIfNeeded();
+            player.AimController.FinalizeCurrentTarget();
         }
     }
 
@@ -271,6 +330,8 @@ public class PlayerManager : MonoBehaviour
     {
         if (player == null || !player.IsAlive)
             return;
+
+        string killFeedMessage = BuildKillFeedMessage(player, causeSummary);
 
         player.SetAlive(false);
         player.ClearConfirmedTarget();
@@ -290,6 +351,8 @@ public class PlayerManager : MonoBehaviour
                 $"[PlayerManager] {player.DisplayName} eliminated at {impactPoint}. " +
                 $"Cause: {causeSummary}");
         }
+
+        KillFeedMessageAdded?.Invoke(killFeedMessage);
     }
 
     public void LockRoster()
@@ -304,6 +367,8 @@ public class PlayerManager : MonoBehaviour
 
     private void ProcessLobbyJoinRequests()
     {
+        ProcessDebugHotkeys();
+
         if (players.Count >= maxPlayers)
             return;
 
@@ -330,7 +395,7 @@ public class PlayerManager : MonoBehaviour
             return;
 
         if (keyboard.spaceKey.wasPressedThisFrame || keyboard.enterKey.wasPressedThisFrame)
-            SpawnPlayer(null, true);
+            SpawnPlayer(null, true, false);
     }
 
     private void TryRegisterKeyboardPlayer()
@@ -344,7 +409,7 @@ public class PlayerManager : MonoBehaviour
                 return;
         }
 
-        SpawnPlayer(null, true);
+        SpawnPlayer(null, true, false);
     }
 
     private void RegisterJoiningGamepads()
@@ -355,7 +420,7 @@ public class PlayerManager : MonoBehaviour
                 continue;
 
             if (pad.buttonSouth.wasPressedThisFrame || pad.startButton.wasPressedThisFrame)
-                SpawnPlayer(pad, false);
+                SpawnPlayer(pad, false, false);
         }
     }
 
@@ -366,15 +431,39 @@ public class PlayerManager : MonoBehaviour
             if (pad == null || assignedGamepads.Contains(pad) || players.Count >= maxPlayers)
                 continue;
 
-            SpawnPlayer(pad, false);
+            SpawnPlayer(pad, false, false);
         }
     }
 
-    private void SpawnPlayer(Gamepad pad, bool usesKeyboard)
+    private void ProcessDebugHotkeys()
     {
+        if (!allowDebugFakePlayers || !enableDebugFakePlayerHotkeys)
+            return;
+
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null)
+            return;
+
+        if (keyboard.f6Key.wasPressedThisFrame)
+            DebugAddFakePlayer();
+
+        if (keyboard.f7Key.wasPressedThisFrame)
+            DebugAddFakePlayers(4);
+    }
+
+    private void SpawnPlayer(Gamepad pad, bool usesKeyboard, bool isDebugPlayer)
+    {
+        WarnAboutMissingReferences();
+
         if (characterPrefabs.Count == 0)
         {
             Debug.LogError("[PlayerManager] No character prefabs assigned.");
+            return;
+        }
+
+        if (players.Count >= maxPlayers)
+        {
+            Debug.LogWarning("[PlayerManager] Cannot add more players. Max player count reached.");
             return;
         }
 
@@ -395,9 +484,9 @@ public class PlayerManager : MonoBehaviour
         if (aimController == null)
             aimController = instance.AddComponent<PlayerAimController>();
 
-        PlayerSlot slot = new PlayerSlot(playerId, pad, usesKeyboard);
+        PlayerSlot slot = new PlayerSlot(playerId, pad, usesKeyboard, isDebugPlayer);
         controller.Initialize(slot, SharedCamera);
-        aimController.Initialize(slot, controller, arenaBounds, crosshairPrefab);
+        aimController.Initialize(slot, controller, arenaBoundTargets, crosshairPrefab);
         slot.Bind(controller, aimController);
 
         players.Add(slot);
@@ -437,5 +526,47 @@ public class PlayerManager : MonoBehaviour
             lookDirection = Vector3.forward;
 
         rotation = Quaternion.LookRotation(lookDirection, Vector3.up);
+    }
+
+    private void WarnAboutMissingReferences()
+    {
+        if (characterPrefabs == null || characterPrefabs.Count == 0)
+        {
+            Debug.LogWarning(
+                "[PlayerManager] Character prefabs list is empty. Players cannot be spawned.");
+        }
+
+        if (sharedCamera == null && Camera.main == null)
+        {
+            Debug.LogWarning(
+                "[PlayerManager] No shared camera assigned and no MainCamera found. " +
+                "Movement and mouse aiming will not work correctly.");
+        }
+
+        if (arenaBoundTargets == null || arenaBoundTargets.Length == 0)
+        {
+            Debug.LogWarning(
+                "[PlayerManager] Arena bound targets are missing. " +
+                "Aim markers will use the fallback ground plane instead of arena clamping.");
+        }
+
+        if (spawnPoints == null || spawnPoints.Length == 0)
+        {
+            Debug.LogWarning(
+                "[PlayerManager] No spawn points assigned. Players will use fallback circle spawning.");
+        }
+    }
+
+    private static string BuildKillFeedMessage(PlayerSlot victim, string causeSummary)
+    {
+        string victimName = victim != null ? victim.DisplayName : "Unknown";
+
+        if (string.IsNullOrWhiteSpace(causeSummary))
+            return $"{victimName} was eliminated";
+
+        if (string.Equals(causeSummary, victimName, StringComparison.OrdinalIgnoreCase))
+            return $"{victimName} eliminated themselves";
+
+        return $"{causeSummary} eliminated {victimName}";
     }
 }

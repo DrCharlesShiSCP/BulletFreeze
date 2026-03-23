@@ -12,18 +12,21 @@ public class PlayerSlot
     
     public int PlayerId { get; private set; }
     public bool UsesKeyboard { get; private set; }
+    public bool IsDebugPlayer { get; private set; }
     public bool IsAlive { get; private set; }
     public bool HasConfirmedTarget { get; private set; }
     public Vector3 ConfirmedTargetPoint { get; private set; }
     public PlayerController Controller { get; private set; }
     public PlayerAimController AimController { get; private set; }
     public string DisplayName => PlayerId > 0 ? $"P{PlayerId}" : "Player";
-    public string InputLabel => UsesKeyboard
+    public string InputLabel => IsDebugPlayer
+        ? "Debug Fake"
+        : UsesKeyboard
         ? "Keyboard"
         : gamepad != null
             ? $"{gamepad.displayName} ({gamepad.deviceId})"
             : "Unassigned";
-    public bool HasPlayableInput => UsesKeyboard || gamepad != null;
+    public bool HasPlayableInput => UsesKeyboard || gamepad != null || IsDebugPlayer;
 
     public PlayerSlot(Gamepad pad)
         : this(0, pad, false)
@@ -31,10 +34,16 @@ public class PlayerSlot
     }
 
     public PlayerSlot(int playerId, Gamepad pad, bool usesKeyboard)
+        : this(playerId, pad, usesKeyboard, false)
+    {
+    }
+
+    public PlayerSlot(int playerId, Gamepad pad, bool usesKeyboard, bool isDebugPlayer)
     {
         PlayerId = playerId;
         gamepad = pad;
         UsesKeyboard = usesKeyboard;
+        IsDebugPlayer = isDebugPlayer;
         selectedIndex = 0;
         isLocked = false;
         playerCharacterController = null;
@@ -73,6 +82,9 @@ public class PlayerSlot
 
     public Vector2 ReadMoveInput()
     {
+        if (IsDebugPlayer)
+            return Vector2.zero;
+
         if (UsesKeyboard)
         {
             return ReadKeyboardVector(
@@ -100,38 +112,20 @@ public class PlayerSlot
 
     public Vector2 ReadAimInput()
     {
-        if (UsesKeyboard)
-        {
-            return ReadKeyboardVector(
-                Keyboard.current,
-                Key.UpArrow,
-                Key.DownArrow,
-                Key.LeftArrow,
-                Key.RightArrow);
-        }
+        if (IsDebugPlayer)
+            return Vector2.zero;
 
         if (gamepad == null)
             return Vector2.zero;
 
-        Vector2 aimInput = gamepad.rightStick.ReadValue();
-
-        if (aimInput.sqrMagnitude > 0.01f)
-            return aimInput;
-
-        Vector2 dpadInput = ReadDigitalVector(
-            gamepad.dpad.up.isPressed,
-            gamepad.dpad.down.isPressed,
-            gamepad.dpad.left.isPressed,
-            gamepad.dpad.right.isPressed);
-
-        if (dpadInput.sqrMagnitude > 0.01f)
-            return dpadInput;
-
-        return gamepad.leftStick.ReadValue();
+        return gamepad.rightStick.ReadValue();
     }
 
     public bool WasConfirmPressedThisFrame()
     {
+        if (IsDebugPlayer)
+            return false;
+
         if (UsesKeyboard)
         {
             Keyboard keyboard = Keyboard.current;
@@ -147,6 +141,9 @@ public class PlayerSlot
 
     public bool WasJoinPressedThisFrame()
     {
+        if (IsDebugPlayer)
+            return false;
+
         if (UsesKeyboard)
         {
             Keyboard keyboard = Keyboard.current;
@@ -162,6 +159,9 @@ public class PlayerSlot
 
     public bool WasStartPressedThisFrame()
     {
+        if (IsDebugPlayer)
+            return false;
+
         if (UsesKeyboard)
         {
             Keyboard keyboard = Keyboard.current;

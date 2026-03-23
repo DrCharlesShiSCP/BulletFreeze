@@ -30,7 +30,7 @@ public class GamePhaseManager : MonoBehaviour
     [SerializeField] private float countdownDuration = 3f;
     [Tooltip("How long players remain locked before aiming begins.")]
     [SerializeField] private float freezeDuration = 1.5f;
-    [Tooltip("Optional cap on aim time. Set to 0 for unlimited wait.")]
+    [Tooltip("How long players can position their strike marker before the target locks automatically.")]
     [SerializeField] private float aimPhaseMaxDuration = 12f;
     [Tooltip("Delay after shoot resolution before the next round begins.")]
     [SerializeField] private float interRoundDelay = 1.25f;
@@ -38,6 +38,8 @@ public class GamePhaseManager : MonoBehaviour
     [Header("Debug")]
     [Tooltip("Logs lobby changes, phase changes, confirmations, and round resets.")]
     [SerializeField] private bool debugLogs = true;
+    [Tooltip("Allow debug hotkeys while testing in the editor or desktop build.")]
+    [SerializeField] private bool enableDebugLobbyHotkeys = true;
 
     private Coroutine matchLoopRoutine;
     private int roundNumber;
@@ -62,6 +64,7 @@ public class GamePhaseManager : MonoBehaviour
     private IEnumerator Start()
     {
         ResolveReferences();
+        WarnAboutMissingReferences();
 
         if (projectileStrikeSystem != null && playerManager != null)
             projectileStrikeSystem.Initialize(playerManager);
@@ -75,6 +78,8 @@ public class GamePhaseManager : MonoBehaviour
 
     private void Update()
     {
+        ProcessDebugHotkeys();
+
         if (!lobbyActive || matchLoopRoutine != null)
             return;
 
@@ -85,6 +90,7 @@ public class GamePhaseManager : MonoBehaviour
     public void EnterLobby()
     {
         ResolveReferences();
+        WarnAboutMissingReferences();
 
         if (playerManager == null)
         {
@@ -101,6 +107,7 @@ public class GamePhaseManager : MonoBehaviour
 
         playerManager.UnlockRoster();
         uiManager?.HideWinner();
+        uiManager?.ClearKillFeed();
 
         cachedLobbyPlayerCount = -1;
         cachedLobbyCanStart = false;
@@ -115,6 +122,7 @@ public class GamePhaseManager : MonoBehaviour
     public void StartMatch()
     {
         ResolveReferences();
+        WarnAboutMissingReferences();
 
         if (playerManager == null || projectileStrikeSystem == null)
         {
@@ -140,6 +148,7 @@ public class GamePhaseManager : MonoBehaviour
 
         lobbyActive = false;
         uiManager?.HideWinner();
+        uiManager?.ClearKillFeed();
         playerManager.LockRoster();
         playerManager.ResetForNewMatch();
 
@@ -254,9 +263,9 @@ public class GamePhaseManager : MonoBehaviour
         playerManager.PrepareAimForAlivePlayers();
         SetPhase(GamePhaseType.Aim);
 
-        float elapsed = 0f;
+        float remaining = Mathf.Max(0f, aimPhaseMaxDuration);
 
-        while (true)
+        while (remaining > 0f)
         {
             List<PlayerSlot> alivePlayers = playerManager.GetAlivePlayers();
             uiManager?.UpdateAimStatus(alivePlayers);
@@ -265,40 +274,16 @@ public class GamePhaseManager : MonoBehaviour
             if (alivePlayers.Count <= 1)
                 yield break;
 
-            if (playerManager.AreAllAlivePlayersConfirmed())
-            {
-                if (debugLogs)
-                    Debug.Log("[GamePhaseManager] All alive players confirmed aim targets.");
-
-                break;
-            }
-
-            if (aimPhaseMaxDuration > 0f)
-            {
-                float remaining = Mathf.Max(0f, aimPhaseMaxDuration - elapsed);
-                uiManager?.UpdateCountdown(remaining);
-
-                if (elapsed >= aimPhaseMaxDuration)
-                {
-                    if (debugLogs)
-                    {
-                        Debug.Log(
-                            "[GamePhaseManager] Aim timer expired. Auto-confirming remaining players.");
-                    }
-
-                    playerManager.AutoConfirmAlivePlayers();
-                    uiManager?.UpdateAimStatus(alivePlayers);
-                    break;
-                }
-            }
-            else
-            {
-                uiManager?.UpdateCountdown(-1f);
-            }
-
-            elapsed += Time.deltaTime;
+            uiManager?.UpdateCountdown(remaining);
+            remaining -= Time.deltaTime;
             yield return null;
         }
+
+        playerManager.FinalizeAimTargets();
+        uiManager?.UpdateAimStatus(playerManager.GetAlivePlayers());
+
+        if (debugLogs)
+            Debug.Log("[GamePhaseManager] Aim phase ended. Locked all current target markers.");
     }
 
     private IEnumerator RunShootPhase()
@@ -429,7 +414,9 @@ public class GamePhaseManager : MonoBehaviour
         if (!isAlive)
             return false;
 
-        if (phase == GamePhaseType.Countdown)
+        if (phase == GamePhaseType.Countdown ||
+            phase == GamePhaseType.Freeze ||
+            phase == GamePhaseType.Aim)
             return false;
 
         return true;
@@ -445,5 +432,48 @@ public class GamePhaseManager : MonoBehaviour
 
         if (uiManager == null)
             uiManager = FindFirstObjectByType<UIManager>();
+    }
+
+    private void WarnAboutMissingReferences()
+    {
+        if (playerManager == null)
+        {
+            Debug.LogWarning(
+                "[GamePhaseManager] PlayerManager reference is missing. " +
+                "Assign it in the inspector or keep one in the scene.");
+        }
+
+        if (projectileStrikeSystem == null)
+        {
+            Debug.LogWarning(
+                "[GamePhaseManager] ProjectileStrikeSystem reference is missing. " +
+                "Shoot phase cannot resolve without it.");
+        }
+
+        if (uiManager == null)
+        {
+            Debug.LogWarning(
+                "[GamePhaseManager] UIManager reference is missing. " +
+                "Gameplay can continue, but phase and lobby UI will not update.");
+        }
+    }
+
+    private void ProcessDebugHotkeys()
+    {
+        if (!enableDebugLobbyHotkeys)
+            return;
+
+        if (UnityEngine.InputSystem.Keyboard.current == null)
+            return;
+
+        if (lobbyActive &&
+            matchLoopRoutine == null &&
+            UnityEngine.InputSystem.Keyboard.current.f8Key.wasPressedThisFrame)
+        {
+            if (debugLogs)
+                Debug.Log("[GamePhaseManager] Debug start requested with F8.");
+
+            StartMatch();
+        }
     }
 }

@@ -11,7 +11,7 @@ public class UIManager : MonoBehaviour
     [SerializeField] private TMP_Text phaseText;
     [Tooltip("Countdown or phase timer text.")]
     [SerializeField] private TMP_Text timerText;
-    [Tooltip("Shows which alive players have confirmed targets.")]
+    [Tooltip("Shows which alive players are still aiming or have their target locked.")]
     [SerializeField] private TMP_Text aimStatusText;
     [Tooltip("Shows remaining alive players.")]
     [SerializeField] private TMP_Text alivePlayersText;
@@ -21,6 +21,43 @@ public class UIManager : MonoBehaviour
     [SerializeField] private GameObject winnerPanel;
     [Tooltip("Winner or draw text inside the winner panel.")]
     [SerializeField] private TMP_Text winnerText;
+
+    [Header("Kill Feed")]
+    [Tooltip("Parent container for rolling kill messages.")]
+    [SerializeField] private RectTransform killFeedRoot;
+    [Tooltip("Template TMP text used for each kill feed entry.")]
+    [SerializeField] private TMP_Text killFeedLinePrefab;
+    [Tooltip("Maximum number of kill feed lines shown at once.")]
+    [SerializeField] private int killFeedMaxEntries = 5;
+    [Tooltip("How long each kill message remains visible before fading.")]
+    [SerializeField] private float killFeedMessageLifetime = 3f;
+    [Tooltip("How long each kill message spends fading out.")]
+    [SerializeField] private float killFeedFadeDuration = 0.75f;
+    [Tooltip("Vertical spacing between kill feed entries.")]
+    [SerializeField] private float killFeedLineSpacing = 28f;
+
+    private readonly List<KillFeedEntry> killFeedEntries = new List<KillFeedEntry>();
+    private PlayerManager subscribedPlayerManager;
+
+    private void Awake()
+    {
+        WarnAboutMissingReferences();
+    }
+
+    private void Start()
+    {
+        SubscribeToPlayerManager();
+    }
+
+    private void OnEnable()
+    {
+        SubscribeToPlayerManager();
+    }
+
+    private void OnDisable()
+    {
+        UnsubscribeFromPlayerManager();
+    }
 
     public void SetPhase(GamePhaseType phase, int roundNumber, int alivePlayers)
     {
@@ -79,7 +116,7 @@ public class UIManager : MonoBehaviour
         {
             PlayerSlot player = alivePlayers[i];
             builder.Append(player.DisplayName);
-            builder.Append(player.HasConfirmedTarget ? " OK" : " ...");
+            builder.Append(player.HasConfirmedTarget ? " Locked" : " Targeting");
 
             if (i < alivePlayers.Count - 1)
                 builder.Append(" | ");
@@ -149,7 +186,10 @@ public class UIManager : MonoBehaviour
             winnerPanel.SetActive(true);
 
         if (winnerText != null)
+        {
+            winnerText.gameObject.SetActive(true);
             winnerText.text = $"{winnerName} wins";
+        }
     }
 
     public void ShowDraw()
@@ -158,13 +198,65 @@ public class UIManager : MonoBehaviour
             winnerPanel.SetActive(true);
 
         if (winnerText != null)
+        {
+            winnerText.gameObject.SetActive(true);
             winnerText.text = "Draw";
+        }
     }
 
     public void HideWinner()
     {
         if (winnerPanel != null)
             winnerPanel.SetActive(false);
+
+        if (winnerText != null)
+        {
+            winnerText.text = string.Empty;
+            winnerText.gameObject.SetActive(false);
+        }
+    }
+
+    public void AddKillFeedMessage(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+
+        if (killFeedLinePrefab == null)
+        {
+            Debug.LogWarning("[UIManager] Kill feed line prefab reference is missing.");
+            return;
+        }
+
+        RectTransform root = ResolveKillFeedRoot();
+        if (root == null)
+        {
+            Debug.LogWarning("[UIManager] Kill feed root reference is missing.");
+            return;
+        }
+
+        TMP_Text lineInstance = Instantiate(killFeedLinePrefab, root);
+        lineInstance.gameObject.SetActive(true);
+        lineInstance.text = message;
+        SetTextAlpha(lineInstance, 1f);
+
+        KillFeedEntry entry = new KillFeedEntry
+        {
+            text = lineInstance
+        };
+
+        killFeedEntries.Add(entry);
+        RefreshKillFeedLayout();
+
+        if (killFeedEntries.Count > Mathf.Max(1, killFeedMaxEntries))
+            RemoveKillFeedEntry(killFeedEntries[0]);
+
+        entry.fadeCoroutine = StartCoroutine(FadeKillFeedEntry(entry));
+    }
+
+    public void ClearKillFeed()
+    {
+        while (killFeedEntries.Count > 0)
+            RemoveKillFeedEntry(killFeedEntries[0]);
     }
 
     public void ShowWaitingForPlayers()
@@ -177,5 +269,137 @@ public class UIManager : MonoBehaviour
 
         if (aimStatusText != null)
             aimStatusText.text = "Press join on an available device.";
+    }
+
+    private void WarnAboutMissingReferences()
+    {
+        if (phaseText == null)
+            Debug.LogWarning("[UIManager] Phase text reference is missing.");
+
+        if (timerText == null)
+            Debug.LogWarning("[UIManager] Timer text reference is missing.");
+
+        if (aimStatusText == null)
+            Debug.LogWarning("[UIManager] Aim status text reference is missing.");
+
+        if (alivePlayersText == null)
+            Debug.LogWarning("[UIManager] Alive players text reference is missing.");
+
+        if (winnerPanel == null)
+            Debug.LogWarning("[UIManager] Winner panel reference is missing.");
+
+        if (winnerText == null)
+            Debug.LogWarning("[UIManager] Winner text reference is missing.");
+
+        if (killFeedLinePrefab == null)
+            Debug.LogWarning("[UIManager] Kill feed line prefab reference is missing.");
+    }
+
+    private void SubscribeToPlayerManager()
+    {
+        if (subscribedPlayerManager != null)
+            return;
+
+        if (PlayerManager.Instance == null)
+            return;
+
+        subscribedPlayerManager = PlayerManager.Instance;
+        subscribedPlayerManager.KillFeedMessageAdded += AddKillFeedMessage;
+    }
+
+    private void UnsubscribeFromPlayerManager()
+    {
+        if (subscribedPlayerManager == null)
+            return;
+
+        subscribedPlayerManager.KillFeedMessageAdded -= AddKillFeedMessage;
+        subscribedPlayerManager = null;
+    }
+
+    private RectTransform ResolveKillFeedRoot()
+    {
+        if (killFeedRoot != null)
+            return killFeedRoot;
+
+        if (killFeedLinePrefab != null)
+            killFeedRoot = killFeedLinePrefab.transform.parent as RectTransform;
+
+        return killFeedRoot;
+    }
+
+    private void RefreshKillFeedLayout()
+    {
+        RectTransform root = ResolveKillFeedRoot();
+        if (root == null)
+            return;
+
+        for (int i = 0; i < killFeedEntries.Count; i++)
+        {
+            TMP_Text entryText = killFeedEntries[i].text;
+            if (entryText == null)
+                continue;
+
+            RectTransform lineRect = entryText.rectTransform;
+            lineRect.SetParent(root, false);
+            lineRect.anchorMin = new Vector2(0f, 1f);
+            lineRect.anchorMax = new Vector2(1f, 1f);
+            lineRect.pivot = new Vector2(0.5f, 1f);
+            lineRect.anchoredPosition = new Vector2(0f, -i * killFeedLineSpacing);
+        }
+    }
+
+    private System.Collections.IEnumerator FadeKillFeedEntry(KillFeedEntry entry)
+    {
+        float holdTime = Mathf.Max(0f, killFeedMessageLifetime - killFeedFadeDuration);
+        if (holdTime > 0f)
+            yield return new WaitForSeconds(holdTime);
+
+        float fadeTime = Mathf.Max(0.01f, killFeedFadeDuration);
+        float elapsed = 0f;
+
+        while (elapsed < fadeTime)
+        {
+            elapsed += Time.deltaTime;
+            float alpha = Mathf.Lerp(1f, 0f, elapsed / fadeTime);
+
+            if (entry.text != null)
+                SetTextAlpha(entry.text, alpha);
+
+            yield return null;
+        }
+
+        RemoveKillFeedEntry(entry);
+    }
+
+    private void RemoveKillFeedEntry(KillFeedEntry entry)
+    {
+        if (entry == null)
+            return;
+
+        if (entry.fadeCoroutine != null)
+            StopCoroutine(entry.fadeCoroutine);
+
+        killFeedEntries.Remove(entry);
+
+        if (entry.text != null)
+            Destroy(entry.text.gameObject);
+
+        RefreshKillFeedLayout();
+    }
+
+    private static void SetTextAlpha(TMP_Text text, float alpha)
+    {
+        if (text == null)
+            return;
+
+        Color color = text.color;
+        color.a = Mathf.Clamp01(alpha);
+        text.color = color;
+    }
+
+    private class KillFeedEntry
+    {
+        public TMP_Text text;
+        public Coroutine fadeCoroutine;
     }
 }
