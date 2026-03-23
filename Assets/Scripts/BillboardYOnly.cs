@@ -6,8 +6,11 @@ public class BillboardYOnly : MonoBehaviour
 
     void LateUpdate()
     {
-        if (cam == null)
+        if (cam == null && Camera.main != null)
             cam = Camera.main.transform;
+
+        if (cam == null)
+            return;
 
         Vector3 lookPos = cam.position - transform.position;
         lookPos.y = 0f;

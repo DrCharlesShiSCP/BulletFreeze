@@ -1,5 +1,5 @@
 using UnityEngine;
-using System.Linq;
+using System.Collections.Generic;
 
 public class PartyCameraController : MonoBehaviour
 {
@@ -15,12 +15,10 @@ public class PartyCameraController : MonoBehaviour
 
     void LateUpdate()
     {
-        if (GameManager.Instance == null || targetCamera == null)
+        if (PlayerManager.Instance == null || targetCamera == null)
             return;
 
-        var players = GameManager.Instance.players
-            .Where(p => p.currentAvatar != null)
-            .ToList();
+        List<PlayerSlot> players = PlayerManager.Instance.GetAlivePlayers();
 
         if (players.Count == 0)
             return;
@@ -29,7 +27,7 @@ public class PartyCameraController : MonoBehaviour
         Vector3 avg = Vector3.zero;
 
         foreach (var p in players)
-            avg += p.currentAvatar.transform.position;
+            avg += p.Controller.transform.position;
 
         avg /= players.Count;
 
@@ -41,8 +39,8 @@ public class PartyCameraController : MonoBehaviour
             for (int j = i + 1; j < players.Count; j++)
             {
                 float d = Vector3.Distance(
-                    players[i].currentAvatar.transform.position,
-                    players[j].currentAvatar.transform.position);
+                    players[i].Controller.transform.position,
+                    players[j].Controller.transform.position);
 
                 maxDistance = Mathf.Max(maxDistance, d);
             }
