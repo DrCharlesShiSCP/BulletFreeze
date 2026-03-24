@@ -32,6 +32,15 @@ public class ProjectileStrikeSystem : MonoBehaviour
     [SerializeField] private float impactRadiusIndicatorHeight = 0.08f;
     [Tooltip("Tint used for the temporary impact radius marker.")]
     [SerializeField] private Color impactRadiusIndicatorColor = new Color(1f, 0.4f, 0.15f, 0.5f);
+    [Header("Prop Blast")]
+    [Tooltip("Objects with this tag will be blown away if they are inside the blast radius.")]
+    [SerializeField] private string propsTag = "props";
+    [Tooltip("Impulse applied to props caught in the blast.")]
+    [SerializeField] private float propBlastForce = 14f;
+    [Tooltip("Extra upward lift applied to blasted props.")]
+    [SerializeField] private float propBlastUpwardForce = 2.5f;
+    [Tooltip("Torque added to props so they tumble after the blast.")]
+    [SerializeField] private float propBlastTorque = 10f;
 
     [Header("Debug")]
     [Tooltip("Logs impacts and eliminated players during the shoot phase.")]
@@ -41,6 +50,7 @@ public class ProjectileStrikeSystem : MonoBehaviour
         new Dictionary<PlayerSlot, HashSet<PlayerSlot>>();
     private readonly Dictionary<PlayerSlot, Vector3> queuedImpactPoints =
         new Dictionary<PlayerSlot, Vector3>();
+    private readonly HashSet<Rigidbody> blastedPropBodies = new HashSet<Rigidbody>();
 
     private PlayerManager playerManager;
 
@@ -163,8 +173,8 @@ public class ProjectileStrikeSystem : MonoBehaviour
                     () =>
                     {
                         HandleImpact(shooter, target, participants);
-                            onComplete?.Invoke();
-                        });
+                        onComplete?.Invoke();
+                    });
 
                 return;
             }
@@ -213,6 +223,8 @@ public class ProjectileStrikeSystem : MonoBehaviour
         Vector3 impactPoint,
         IReadOnlyList<PlayerSlot> participants)
     {
+        GamePhaseManager.Instance?.PlayExplosionSoundAt(impactPoint);
+
         if (impactEffectPrefab != null)
         {
             GameObject impactFxInstance = Instantiate(impactEffectPrefab, impactPoint, Quaternion.identity);
@@ -232,6 +244,8 @@ public class ProjectileStrikeSystem : MonoBehaviour
 
         if (showImpactRadiusIndicator)
             StartCoroutine(ShowImpactRadiusIndicator(impactPoint));
+
+        BlastNearbyProps(impactPoint);
 
         bool hitAnyPlayer = false;
 
@@ -303,6 +317,74 @@ public class ProjectileStrikeSystem : MonoBehaviour
         Vector2 a2 = new Vector2(a.x, a.z);
         Vector2 b2 = new Vector2(b.x, b.z);
         return Vector2.Distance(a2, b2);
+    }
+
+    private void BlastNearbyProps(Vector3 impactPoint)
+    {
+        if (string.IsNullOrWhiteSpace(propsTag))
+            return;
+
+        blastedPropBodies.Clear();
+
+        Collider[] hitColliders = Physics.OverlapSphere(
+            impactPoint,
+            strikeRadius,
+            Physics.AllLayers,
+            QueryTriggerInteraction.Ignore);
+
+        foreach (Collider hitCollider in hitColliders)
+        {
+            if (hitCollider == null)
+                continue;
+
+            GameObject taggedObject = FindTaggedPropObject(hitCollider.transform);
+            if (taggedObject == null)
+                continue;
+
+            Rigidbody propBody = taggedObject.GetComponent<Rigidbody>();
+            if (propBody == null)
+                propBody = taggedObject.AddComponent<Rigidbody>();
+
+            if (!blastedPropBodies.Add(propBody))
+                continue;
+
+            propBody.isKinematic = false;
+            propBody.useGravity = true;
+            propBody.interpolation = RigidbodyInterpolation.Interpolate;
+
+            Vector3 blastDirection = taggedObject.transform.position - impactPoint;
+            blastDirection.y = 0f;
+
+            if (blastDirection.sqrMagnitude < 0.001f)
+                blastDirection = UnityEngine.Random.insideUnitSphere;
+
+            blastDirection.Normalize();
+            blastDirection.y += propBlastUpwardForce;
+
+            propBody.AddForce(blastDirection.normalized * propBlastForce, ForceMode.Impulse);
+            propBody.AddTorque(UnityEngine.Random.onUnitSphere * propBlastTorque, ForceMode.Impulse);
+
+            if (debugLogs)
+            {
+                Debug.Log(
+                    $"[ProjectileStrikeSystem] Blasted prop '{taggedObject.name}' at {taggedObject.transform.position}.");
+            }
+        }
+    }
+
+    private GameObject FindTaggedPropObject(Transform startTransform)
+    {
+        Transform current = startTransform;
+
+        while (current != null)
+        {
+            if (string.Equals(current.tag, propsTag, StringComparison.Ordinal))
+                return current.gameObject;
+
+            current = current.parent;
+        }
+
+        return null;
     }
 
     private void WarnAboutMissingReferences()

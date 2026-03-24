@@ -34,6 +34,17 @@ public class GamePhaseManager : MonoBehaviour
     [SerializeField] private float aimPhaseMaxDuration = 12f;
     [Tooltip("Delay after shoot resolution before the next round begins.")]
     [SerializeField] private float interRoundDelay = 1.25f;
+    [Header("Audio")]
+    [Tooltip("Loops throughout the full gameplay session. Leave empty to disable music.")]
+    [SerializeField] private AudioClip backgroundMusic;
+    [Tooltip("Played whenever a projectile impacts the ground.")]
+    [SerializeField] private AudioClip explosionSoundEffect;
+    [Tooltip("Played when a player is eliminated.")]
+    [SerializeField] private AudioClip deathSound;
+    [Tooltip("Volume for the looping background music.")]
+    [SerializeField] [Range(0f, 1f)] private float backgroundMusicVolume = 0.55f;
+    [Tooltip("Volume used for projectile impact and death one-shots.")]
+    [SerializeField] [Range(0f, 1f)] private float soundEffectVolume = 1f;
 
     [Header("Debug")]
     [Tooltip("Logs lobby changes, phase changes, confirmations, and round resets.")]
@@ -46,6 +57,7 @@ public class GamePhaseManager : MonoBehaviour
     private bool lobbyActive;
     private int cachedLobbyPlayerCount = -1;
     private bool cachedLobbyCanStart;
+    private AudioSource backgroundMusicSource;
 
     public GamePhaseType CurrentPhase { get; private set; } = GamePhaseType.None;
 
@@ -65,6 +77,8 @@ public class GamePhaseManager : MonoBehaviour
     {
         ResolveReferences();
         WarnAboutMissingReferences();
+        EnsureAudioSources();
+        TryStartBackgroundMusic();
 
         if (projectileStrikeSystem != null && playerManager != null)
             projectileStrikeSystem.Initialize(playerManager);
@@ -91,6 +105,8 @@ public class GamePhaseManager : MonoBehaviour
     {
         ResolveReferences();
         WarnAboutMissingReferences();
+        EnsureAudioSources();
+        TryStartBackgroundMusic();
 
         if (playerManager == null)
         {
@@ -274,6 +290,14 @@ public class GamePhaseManager : MonoBehaviour
             if (alivePlayers.Count <= 1)
                 yield break;
 
+            if (playerManager.AreAllAlivePlayersConfirmed())
+            {
+                if (debugLogs)
+                    Debug.Log("[GamePhaseManager] All alive players locked in aim. Skipping remaining aim timer.");
+
+                break;
+            }
+
             uiManager?.UpdateCountdown(remaining);
             remaining -= Time.deltaTime;
             yield return null;
@@ -331,7 +355,7 @@ public class GamePhaseManager : MonoBehaviour
                 player.Controller.SetPhaseVisible(ShouldBeVisible(phase, alive));
 
                 if (!alive)
-                    player.Controller.SetEliminated(true);
+                    player.Controller.SetEliminated(true, Vector3.zero);
             }
 
             if (player.AimController != null)
@@ -456,6 +480,93 @@ public class GamePhaseManager : MonoBehaviour
                 "[GamePhaseManager] UIManager reference is missing. " +
                 "Gameplay can continue, but phase and lobby UI will not update.");
         }
+    }
+
+    public void PlayExplosionSoundAt(Vector3 worldPosition)
+    {
+        if (debugLogs)
+        {
+            Debug.LogWarning(
+                $"[GamePhaseManager] Playing explosion sound at {worldPosition}.");
+        }
+
+        PlayClipAtPoint(explosionSoundEffect, worldPosition);
+    }
+
+    public void PlayDeathSoundAt(Vector3 worldPosition)
+    {
+        if (debugLogs)
+        {
+            Debug.LogWarning(
+                $"[GamePhaseManager] Playing death sound at {worldPosition}.");
+        }
+
+        PlayClipAtPoint(deathSound, worldPosition);
+    }
+
+    private void EnsureAudioSources()
+    {
+        if (backgroundMusicSource != null)
+            return;
+
+        AudioSource[] audioSources = GetComponents<AudioSource>();
+        if (audioSources != null)
+        {
+            foreach (AudioSource source in audioSources)
+            {
+                if (source == null)
+                    continue;
+
+                if (backgroundMusicSource == null)
+                {
+                    backgroundMusicSource = source;
+                    break;
+                }
+            }
+        }
+
+        if (backgroundMusicSource == null)
+            backgroundMusicSource = gameObject.AddComponent<AudioSource>();
+
+        backgroundMusicSource.playOnAwake = false;
+        backgroundMusicSource.loop = true;
+        backgroundMusicSource.spatialBlend = 0f;
+    }
+
+    private void TryStartBackgroundMusic()
+    {
+        if (backgroundMusicSource == null)
+            return;
+
+        backgroundMusicSource.volume = backgroundMusicVolume;
+
+        if (backgroundMusic == null)
+        {
+            if (backgroundMusicSource.isPlaying)
+                backgroundMusicSource.Stop();
+
+            backgroundMusicSource.clip = null;
+            return;
+        }
+
+        if (backgroundMusicSource.clip != backgroundMusic)
+            backgroundMusicSource.clip = backgroundMusic;
+
+        if (!backgroundMusicSource.isPlaying)
+        {
+            if (debugLogs)
+                Debug.LogWarning("[GamePhaseManager] Starting background music playback.");
+
+            backgroundMusicSource.Play();
+        }
+    }
+
+    private void PlayClipAtPoint(AudioClip clip, Vector3 worldPosition)
+    {
+        if (clip == null)
+            return;
+
+        AudioSource.PlayClipAtPoint(clip, worldPosition, soundEffectVolume);
     }
 
     private void ProcessDebugHotkeys()

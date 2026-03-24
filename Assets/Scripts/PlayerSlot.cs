@@ -115,10 +115,7 @@ public class PlayerSlot
         if (IsDebugPlayer)
             return Vector2.zero;
 
-        if (gamepad == null)
-            return Vector2.zero;
-
-        return gamepad.rightStick.ReadValue();
+        return ReadMoveInput();
     }
 
     public bool WasConfirmPressedThisFrame()

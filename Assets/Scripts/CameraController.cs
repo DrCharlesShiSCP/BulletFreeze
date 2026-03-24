@@ -23,7 +23,6 @@ public class PartyCameraController : MonoBehaviour
         if (players.Count == 0)
             return;
 
-        // Average position
         Vector3 avg = Vector3.zero;
 
         foreach (var p in players)
@@ -31,7 +30,6 @@ public class PartyCameraController : MonoBehaviour
 
         avg /= players.Count;
 
-        // Max distance between players
         float maxDistance = 0f;
 
         for (int i = 0; i < players.Count; i++)

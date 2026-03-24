@@ -20,6 +20,8 @@ public class PlayerAimController : MonoBehaviour
     [SerializeField] private GameObject crosshairPrefab;
     [Tooltip("Fallback scale used when the controller creates a primitive marker.")]
     [SerializeField] private Vector3 fallbackMarkerScale = new Vector3(0.55f, 0.12f, 0.55f);
+    [Tooltip("Small viewport padding so controller aim remains inside the visible camera area.")]
+    [SerializeField] [Range(0f, 0.2f)] private float controllerAimViewportPadding = 0.03f;
 
     [Header("Debug")]
     [Tooltip("Random offset radius used when a fake debug player picks an aim point.")]
@@ -74,6 +76,9 @@ public class PlayerAimController : MonoBehaviour
         if (playerSlot.IsDebugPlayer)
             return;
 
+        if (hasConfirmed)
+            return;
+
         if (playerSlot.UsesKeyboard)
         {
             if (TryGetMouseAimPoint(out Vector3 mouseTargetPoint))
@@ -81,22 +86,47 @@ public class PlayerAimController : MonoBehaviour
                 currentTargetPoint = ClampToArena(mouseTargetPoint);
                 UpdateMarkerTransform();
             }
+        }
+        else
+        {
+            Vector2 aimInput = playerSlot.ReadAimInput();
 
-            return;
+            if (aimInput.sqrMagnitude > 0.001f)
+            {
+                Camera aimCamera = playerController != null ? playerController.SharedCameraRef : Camera.main;
+                Vector3 aimDelta;
+
+                if (aimCamera != null)
+                {
+                    Vector3 forward = aimCamera.transform.forward;
+                    forward.y = 0f;
+                    forward.Normalize();
+
+                    Vector3 right = aimCamera.transform.right;
+                    right.y = 0f;
+                    right.Normalize();
+
+                    aimDelta = forward * aimInput.y + right * aimInput.x;
+                }
+                else
+                {
+                    aimDelta = new Vector3(aimInput.x, 0f, aimInput.y);
+                }
+
+                currentTargetPoint +=
+                    aimDelta *
+                    crosshairMoveSpeed *
+                    Time.deltaTime;
+
+                currentTargetPoint = ClampToArena(currentTargetPoint);
+                currentTargetPoint = ClampControllerAimToCameraView(currentTargetPoint, aimCamera);
+                currentTargetPoint = ClampToArena(currentTargetPoint);
+                UpdateMarkerTransform();
+            }
         }
 
-        Vector2 aimInput = playerSlot.ReadAimInput();
-
-        if (aimInput.sqrMagnitude <= 0.001f)
-            return;
-
-        currentTargetPoint +=
-            new Vector3(aimInput.x, 0f, aimInput.y) *
-            crosshairMoveSpeed *
-            Time.deltaTime;
-
-        currentTargetPoint = ClampToArena(currentTargetPoint);
-        UpdateMarkerTransform();
+        if (playerSlot.WasConfirmPressedThisFrame())
+            FinalizeCurrentTarget();
     }
 
     public void ResetForNextRound()
@@ -273,6 +303,115 @@ public class PlayerAimController : MonoBehaviour
         }
 
         return false;
+    }
+
+    private Vector3 ClampControllerAimToCameraView(Vector3 point, Camera aimCamera)
+    {
+        if (aimCamera == null)
+            return point;
+
+        Vector3 viewportPoint = aimCamera.WorldToViewportPoint(point);
+        float minViewport = controllerAimViewportPadding;
+        float maxViewport = 1f - controllerAimViewportPadding;
+
+        if (viewportPoint.z > 0f &&
+            viewportPoint.x >= minViewport &&
+            viewportPoint.x <= maxViewport &&
+            viewportPoint.y >= minViewport &&
+            viewportPoint.y <= maxViewport)
+        {
+            return point;
+        }
+
+        List<Vector3> visibleGroundPolygon = new List<Vector3>(4);
+        if (!TryAddViewportGroundPoint(aimCamera, minViewport, minViewport, visibleGroundPolygon) ||
+            !TryAddViewportGroundPoint(aimCamera, minViewport, maxViewport, visibleGroundPolygon) ||
+            !TryAddViewportGroundPoint(aimCamera, maxViewport, maxViewport, visibleGroundPolygon) ||
+            !TryAddViewportGroundPoint(aimCamera, maxViewport, minViewport, visibleGroundPolygon))
+        {
+            return point;
+        }
+
+        if (IsPointInsidePolygonXZ(point, visibleGroundPolygon))
+        {
+            point.y = resolvedGroundHeight + markerHeight;
+            return point;
+        }
+
+        Vector3 closestPoint = visibleGroundPolygon[0];
+        float closestSqrDistance = float.PositiveInfinity;
+
+        for (int i = 0; i < visibleGroundPolygon.Count; i++)
+        {
+            Vector3 edgeStart = visibleGroundPolygon[i];
+            Vector3 edgeEnd = visibleGroundPolygon[(i + 1) % visibleGroundPolygon.Count];
+            Vector3 edgePoint = ClosestPointOnSegmentXZ(point, edgeStart, edgeEnd);
+            float sqrDistance = (new Vector2(point.x, point.z) - new Vector2(edgePoint.x, edgePoint.z)).sqrMagnitude;
+
+            if (sqrDistance < closestSqrDistance)
+            {
+                closestSqrDistance = sqrDistance;
+                closestPoint = edgePoint;
+            }
+        }
+
+        closestPoint.y = resolvedGroundHeight + markerHeight;
+        return closestPoint;
+    }
+
+    private bool TryAddViewportGroundPoint(
+        Camera aimCamera,
+        float viewportX,
+        float viewportY,
+        List<Vector3> polygonPoints)
+    {
+        Plane groundPlane = new Plane(Vector3.up, new Vector3(0f, resolvedGroundHeight, 0f));
+        Ray viewportRay = aimCamera.ViewportPointToRay(new Vector3(viewportX, viewportY, 0f));
+
+        if (!groundPlane.Raycast(viewportRay, out float enter))
+            return false;
+
+        Vector3 point = viewportRay.GetPoint(enter);
+        point.y = resolvedGroundHeight + markerHeight;
+        polygonPoints.Add(point);
+        return true;
+    }
+
+    private static bool IsPointInsidePolygonXZ(Vector3 point, List<Vector3> polygon)
+    {
+        bool inside = false;
+        Vector2 point2 = new Vector2(point.x, point.z);
+
+        for (int i = 0, j = polygon.Count - 1; i < polygon.Count; j = i++)
+        {
+            Vector2 a = new Vector2(polygon[i].x, polygon[i].z);
+            Vector2 b = new Vector2(polygon[j].x, polygon[j].z);
+
+            bool intersects =
+                ((a.y > point2.y) != (b.y > point2.y)) &&
+                (point2.x < ((b.x - a.x) * (point2.y - a.y) / Mathf.Max(0.0001f, b.y - a.y)) + a.x);
+
+            if (intersects)
+                inside = !inside;
+        }
+
+        return inside;
+    }
+
+    private static Vector3 ClosestPointOnSegmentXZ(Vector3 point, Vector3 a, Vector3 b)
+    {
+        Vector2 point2 = new Vector2(point.x, point.z);
+        Vector2 a2 = new Vector2(a.x, a.z);
+        Vector2 b2 = new Vector2(b.x, b.z);
+        Vector2 segment = b2 - a2;
+        float segmentSqrMagnitude = segment.sqrMagnitude;
+
+        if (segmentSqrMagnitude <= 0.0001f)
+            return a;
+
+        float t = Mathf.Clamp01(Vector2.Dot(point2 - a2, segment) / segmentSqrMagnitude);
+        Vector2 closest2 = a2 + segment * t;
+        return new Vector3(closest2.x, a.y, closest2.y);
     }
 
     private Vector3 GenerateDebugTargetPoint()

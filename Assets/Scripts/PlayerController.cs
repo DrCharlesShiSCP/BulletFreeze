@@ -1,5 +1,6 @@
 using TMPro;
 using UnityEngine;
+using System.Collections.Generic;
 
 // Shared movement and presentation controller for a spawned player avatar.
 [RequireComponent(typeof(CharacterController))]
@@ -30,6 +31,13 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private TMP_Text line1;
     [Tooltip("Optional floating text for the player status line.")]
     [SerializeField] private TMP_Text line2;
+    [Header("Elimination")]
+    [Tooltip("When enabled, child rigidbodies and colliders are switched into ragdoll mode on elimination.")]
+    [SerializeField] private bool enableRagdollOnElimination = true;
+    [Tooltip("Impulse applied away from the impact point when the ragdoll activates.")]
+    [SerializeField] private float ragdollImpactForce = 8f;
+    [Tooltip("Extra upward force added to the ragdoll so deaths feel less flat.")]
+    [SerializeField] private float ragdollUpwardForce = 2f;
 
     [HideInInspector] public PlayerSlot playerSlot;
 
@@ -39,6 +47,11 @@ public class PlayerController : MonoBehaviour
     private bool movementAllowed;
     private bool phaseVisible = true;
     private bool isEliminated;
+    private bool ragdollActive;
+    private Rigidbody[] ragdollBodies;
+    private Collider[] ragdollColliders;
+    private readonly List<TransformPose> ragdollStartPoses = new List<TransformPose>();
+    private Rigidbody rootRigidbody;
 
     public Vector3 ProjectileSpawnPosition =>
         projectileSpawnPoint != null
@@ -52,6 +65,7 @@ public class PlayerController : MonoBehaviour
     protected virtual void Awake()
     {
         characterController = GetComponent<CharacterController>();
+        rootRigidbody = GetComponent<Rigidbody>();
 
         if (animator == null)
             animator = GetComponent<Animator>();
@@ -77,6 +91,8 @@ public class PlayerController : MonoBehaviour
         }
 
         RefreshCameraReference();
+        CacheRagdollParts();
+        SetRagdollState(false, Vector3.zero);
         WarnAboutMissingReferences();
     }
 
@@ -118,6 +134,7 @@ public class PlayerController : MonoBehaviour
         movementAllowed = false;
         isEliminated = false;
         phaseVisible = true;
+        SetRagdollState(false, Vector3.zero);
 
         if (characterController != null)
             characterController.enabled = false;
@@ -145,16 +162,30 @@ public class PlayerController : MonoBehaviour
         ApplyVisibilityState();
     }
 
-    public void SetEliminated(bool eliminated)
+    public void SetEliminated(bool eliminated, Vector3 impactPoint)
     {
+        if (isEliminated == eliminated)
+        {
+            ApplyVisibilityState();
+            UpdateAnimatorState();
+            return;
+        }
+
         isEliminated = eliminated;
         movementAllowed = movementAllowed && !eliminated;
 
-        if (characterController != null && characterController.enabled == eliminated)
-            characterController.enabled = !eliminated;
-
         if (eliminated)
+        {
             velocity = Vector3.zero;
+            SetRagdollState(true, impactPoint);
+        }
+        else
+        {
+            SetRagdollState(false, impactPoint);
+
+            if (characterController != null)
+                characterController.enabled = true;
+        }
 
         ApplyVisibilityState();
         UpdateAnimatorState();
@@ -232,7 +263,7 @@ public class PlayerController : MonoBehaviour
 
     private void ApplyVisibilityState()
     {
-        bool visible = phaseVisible && !isEliminated;
+        bool visible = ragdollActive || (!isEliminated && phaseVisible);
 
         if (renderersToToggle == null)
             return;
@@ -276,6 +307,136 @@ public class PlayerController : MonoBehaviour
         {
             Debug.LogWarning(
                 $"[PlayerController] No movement camera assigned for '{name}', and no MainCamera was found.");
+        }
+
+        if (enableRagdollOnElimination)
+        {
+            if (ragdollBodies == null || ragdollBodies.Length == 0)
+            {
+                Debug.LogWarning(
+                    $"[PlayerController] Ragdoll is enabled on '{name}', but no child Rigidbodies were found. " +
+                    "Animated bones alone are not enough. Add ragdoll physics to the character prefab.");
+            }
+            else if (ragdollColliders == null || ragdollColliders.Length == 0)
+            {
+                Debug.LogWarning(
+                    $"[PlayerController] Ragdoll is enabled on '{name}', but no child Colliders were found. " +
+                    "Add colliders to the ragdoll bones so they can collide with the world.");
+            }
+        }
+    }
+
+    private void CacheRagdollParts()
+    {
+        List<Rigidbody> foundBodies = new List<Rigidbody>(GetComponentsInChildren<Rigidbody>(true));
+        if (rootRigidbody != null)
+            foundBodies.Remove(rootRigidbody);
+
+        ragdollBodies = foundBodies.ToArray();
+
+        List<Collider> foundColliders = new List<Collider>(GetComponentsInChildren<Collider>(true));
+        if (characterController != null)
+            foundColliders.Remove(characterController);
+
+        ragdollColliders = foundColliders.ToArray();
+        ragdollStartPoses.Clear();
+
+        foreach (Rigidbody body in ragdollBodies)
+        {
+            if (body == null)
+                continue;
+
+            ragdollStartPoses.Add(new TransformPose(body.transform));
+        }
+    }
+
+    private void SetRagdollState(bool enabled, Vector3 impactPoint)
+    {
+        ragdollActive = enabled && enableRagdollOnElimination && ragdollBodies != null && ragdollBodies.Length > 0;
+
+        if (animator != null)
+            animator.enabled = !ragdollActive;
+
+        if (characterController != null)
+            characterController.enabled = !enabled;
+
+        if (rootRigidbody != null)
+        {
+            rootRigidbody.isKinematic = true;
+            rootRigidbody.linearVelocity = Vector3.zero;
+            rootRigidbody.angularVelocity = Vector3.zero;
+        }
+
+        if (ragdollBodies == null || ragdollColliders == null)
+            return;
+
+        for (int i = 0; i < ragdollBodies.Length; i++)
+        {
+            Rigidbody body = ragdollBodies[i];
+            if (body == null)
+                continue;
+
+            body.isKinematic = !ragdollActive;
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+
+            if (!ragdollActive && i < ragdollStartPoses.Count)
+                ragdollStartPoses[i].ApplyTo(body.transform);
+        }
+
+        foreach (Collider ragdollCollider in ragdollColliders)
+        {
+            if (ragdollCollider != null)
+                ragdollCollider.enabled = ragdollActive;
+        }
+
+        if (ragdollActive)
+            ApplyRagdollImpactForce(impactPoint);
+    }
+
+    private void ApplyRagdollImpactForce(Vector3 impactPoint)
+    {
+        Vector3 origin = impactPoint;
+        bool hasImpactPoint = impactPoint.sqrMagnitude > 0.001f;
+
+        foreach (Rigidbody body in ragdollBodies)
+        {
+            if (body == null)
+                continue;
+
+            Vector3 direction =
+                hasImpactPoint
+                    ? (body.worldCenterOfMass - origin).normalized
+                    : transform.forward;
+
+            if (direction.sqrMagnitude < 0.001f)
+                direction = transform.forward.sqrMagnitude > 0.001f ? transform.forward : Vector3.up;
+
+            direction += Vector3.up * ragdollUpwardForce;
+            body.AddForce(direction.normalized * ragdollImpactForce, ForceMode.Impulse);
+        }
+    }
+
+    private readonly struct TransformPose
+    {
+        private readonly Transform target;
+        private readonly Vector3 localPosition;
+        private readonly Quaternion localRotation;
+
+        public TransformPose(Transform transform)
+        {
+            target = transform;
+            localPosition = transform.localPosition;
+            localRotation = transform.localRotation;
+        }
+
+        public void ApplyTo(Transform transform)
+        {
+            if (transform == null || transform != target)
+                return;
+
+            transform.localPosition = localPosition;
+            transform.localRotation = localRotation;
         }
     }
 }

@@ -121,7 +121,7 @@ public class PlayerManager : MonoBehaviour
             player.Controller.ResetToSpawn(spawnPosition, spawnRotation);
             player.Controller.SetLine1(player.DisplayName);
             player.Controller.SetLine2(player.InputLabel);
-            player.Controller.SetEliminated(false);
+            player.Controller.SetEliminated(false, Vector3.zero);
             player.Controller.SetPhaseVisible(true);
             player.Controller.SetMovementAllowed(false);
 
@@ -198,7 +198,7 @@ public class PlayerManager : MonoBehaviour
             player.SetAlive(true);
             player.ClearConfirmedTarget();
             player.Controller.ResetToSpawn(spawnPosition, spawnRotation);
-            player.Controller.SetEliminated(false);
+            player.Controller.SetEliminated(false, Vector3.zero);
             player.Controller.SetPhaseVisible(true);
             player.Controller.SetMovementAllowed(false);
             player.Controller.SetLine1(player.DisplayName);
@@ -341,9 +341,12 @@ public class PlayerManager : MonoBehaviour
 
         if (player.Controller != null)
         {
-            player.Controller.SetEliminated(true);
+            player.Controller.SetEliminated(true, impactPoint);
             player.Controller.SetLine2("Eliminated");
         }
+
+        GamePhaseManager.Instance?.PlayDeathSoundAt(
+            player.Controller != null ? player.Controller.transform.position : impactPoint);
 
         if (debugLogs)
         {
