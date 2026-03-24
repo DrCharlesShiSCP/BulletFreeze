@@ -41,6 +41,13 @@ public class ProjectileStrikeSystem : MonoBehaviour
     [SerializeField] private float propBlastUpwardForce = 2.5f;
     [Tooltip("Torque added to props so they tumble after the blast.")]
     [SerializeField] private float propBlastTorque = 10f;
+    [Header("Haptics")]
+    [Tooltip("Low-frequency rumble sent to alive controller players when a bomb impacts.")]
+    [SerializeField] [Range(0f, 1f)] private float bombHitRumbleLowFrequency = 0.35f;
+    [Tooltip("High-frequency rumble sent to alive controller players when a bomb impacts.")]
+    [SerializeField] [Range(0f, 1f)] private float bombHitRumbleHighFrequency = 1f;
+    [Tooltip("How long the bomb-hit rumble lasts.")]
+    [SerializeField] private float bombHitRumbleDuration = 0.18f;
 
     [Header("Debug")]
     [Tooltip("Logs impacts and eliminated players during the shoot phase.")]
@@ -224,6 +231,10 @@ public class ProjectileStrikeSystem : MonoBehaviour
         IReadOnlyList<PlayerSlot> participants)
     {
         GamePhaseManager.Instance?.PlayExplosionSoundAt(impactPoint);
+        playerManager?.PulseAliveControllers(
+            bombHitRumbleLowFrequency,
+            bombHitRumbleHighFrequency,
+            bombHitRumbleDuration);
 
         if (impactEffectPrefab != null)
         {

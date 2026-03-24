@@ -45,6 +45,13 @@ public class GamePhaseManager : MonoBehaviour
     [SerializeField] [Range(0f, 1f)] private float backgroundMusicVolume = 0.55f;
     [Tooltip("Volume used for projectile impact and death one-shots.")]
     [SerializeField] [Range(0f, 1f)] private float soundEffectVolume = 1f;
+    [Header("Haptics")]
+    [Tooltip("Low-frequency rumble sent to alive controller players when the freeze phase begins.")]
+    [SerializeField] [Range(0f, 1f)] private float freezeRumbleLowFrequency = 0.25f;
+    [Tooltip("High-frequency rumble sent to alive controller players when the freeze phase begins.")]
+    [SerializeField] [Range(0f, 1f)] private float freezeRumbleHighFrequency = 0.75f;
+    [Tooltip("How long the freeze-phase rumble lasts.")]
+    [SerializeField] private float freezeRumbleDuration = 0.2f;
 
     [Header("Debug")]
     [Tooltip("Logs lobby changes, phase changes, confirmations, and round resets.")]
@@ -262,6 +269,12 @@ public class GamePhaseManager : MonoBehaviour
     private IEnumerator RunTimedPhase(GamePhaseType phase, float duration)
     {
         SetPhase(phase);
+
+        if (phase == GamePhaseType.Freeze)
+            playerManager?.PulseAliveControllers(
+                freezeRumbleLowFrequency,
+                freezeRumbleHighFrequency,
+                freezeRumbleDuration);
 
         float remaining = duration;
         while (remaining > 0f)

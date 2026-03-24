@@ -22,6 +22,13 @@ public class PlayerAimController : MonoBehaviour
     [SerializeField] private Vector3 fallbackMarkerScale = new Vector3(0.55f, 0.12f, 0.55f);
     [Tooltip("Small viewport padding so controller aim remains inside the visible camera area.")]
     [SerializeField] [Range(0f, 0.2f)] private float controllerAimViewportPadding = 0.03f;
+    [Header("Haptics")]
+    [Tooltip("Low-frequency rumble sent to the controller when this player locks in their aim.")]
+    [SerializeField] [Range(0f, 1f)] private float aimLockRumbleLowFrequency = 0.2f;
+    [Tooltip("High-frequency rumble sent to the controller when this player locks in their aim.")]
+    [SerializeField] [Range(0f, 1f)] private float aimLockRumbleHighFrequency = 0.9f;
+    [Tooltip("How long the aim lock-in rumble lasts.")]
+    [SerializeField] private float aimLockRumbleDuration = 0.14f;
 
     [Header("Debug")]
     [Tooltip("Random offset radius used when a fake debug player picks an aim point.")]
@@ -182,6 +189,12 @@ public class PlayerAimController : MonoBehaviour
 
         if (playerController != null)
             playerController.SetLine2("Locked");
+
+        PlayerManager.Instance?.PulseController(
+            playerSlot,
+            aimLockRumbleLowFrequency,
+            aimLockRumbleHighFrequency,
+            aimLockRumbleDuration);
 
         if (playerSlot != null)
         {

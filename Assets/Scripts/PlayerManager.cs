@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -44,6 +45,7 @@ public class PlayerManager : MonoBehaviour
 
     private readonly List<PlayerSlot> players = new List<PlayerSlot>();
     private readonly HashSet<Gamepad> assignedGamepads = new HashSet<Gamepad>();
+    private readonly Dictionary<Gamepad, Coroutine> rumbleCoroutines = new Dictionary<Gamepad, Coroutine>();
     private bool rosterLocked;
     private int lastJoinFrame = -1;
 
@@ -69,6 +71,11 @@ public class PlayerManager : MonoBehaviour
 
         if (!requireJoinInput)
             RegisterAvailablePlayers();
+    }
+
+    private void OnDisable()
+    {
+        StopAllRumbles();
     }
 
     private void Update()
@@ -326,6 +333,25 @@ public class PlayerManager : MonoBehaviour
         }
     }
 
+    public void PulseController(PlayerSlot player, float lowFrequency, float highFrequency, float duration)
+    {
+        if (player == null || player.gamepad == null)
+            return;
+
+        StartRumble(player.gamepad, lowFrequency, highFrequency, duration);
+    }
+
+    public void PulseAliveControllers(float lowFrequency, float highFrequency, float duration)
+    {
+        foreach (PlayerSlot player in players)
+        {
+            if (player == null || !player.IsAlive || player.gamepad == null)
+                continue;
+
+            StartRumble(player.gamepad, lowFrequency, highFrequency, duration);
+        }
+    }
+
     public void EliminatePlayer(PlayerSlot player, string causeSummary, Vector3 impactPoint)
     {
         if (player == null || !player.IsAlive)
@@ -571,5 +597,49 @@ public class PlayerManager : MonoBehaviour
             return $"{victimName} eliminated themselves";
 
         return $"{causeSummary} eliminated {victimName}";
+    }
+
+    private void StartRumble(Gamepad pad, float lowFrequency, float highFrequency, float duration)
+    {
+        if (pad == null)
+            return;
+
+        lowFrequency = Mathf.Clamp01(lowFrequency);
+        highFrequency = Mathf.Clamp01(highFrequency);
+        duration = Mathf.Max(0.01f, duration);
+
+        if (rumbleCoroutines.TryGetValue(pad, out Coroutine existingRoutine) && existingRoutine != null)
+            StopCoroutine(existingRoutine);
+
+        pad.ResetHaptics();
+        rumbleCoroutines[pad] = StartCoroutine(RumbleRoutine(pad, lowFrequency, highFrequency, duration));
+    }
+
+    private IEnumerator RumbleRoutine(Gamepad pad, float lowFrequency, float highFrequency, float duration)
+    {
+        if (pad == null)
+            yield break;
+
+        pad.SetMotorSpeeds(lowFrequency, highFrequency);
+        yield return new WaitForSeconds(duration);
+
+        if (pad != null)
+            pad.ResetHaptics();
+
+        rumbleCoroutines.Remove(pad);
+    }
+
+    private void StopAllRumbles()
+    {
+        foreach (KeyValuePair<Gamepad, Coroutine> rumble in rumbleCoroutines)
+        {
+            if (rumble.Value != null)
+                StopCoroutine(rumble.Value);
+
+            if (rumble.Key != null)
+                rumble.Key.ResetHaptics();
+        }
+
+        rumbleCoroutines.Clear();
     }
 }
